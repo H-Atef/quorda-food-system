@@ -1,0 +1,358 @@
+from drf_spectacular.utils import extend_schema, OpenApiResponse
+from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from apps.restaurants.permissions import IsRestaurantOwner
+from apps.restaurants.serializers import (
+    CategorySerializer, MenuItemSerializer, CriteriaSerializer, CalculationParamsSerializer,
+    PublicRestaurantProfileSerializer,
+)
+from apps.restaurants.services import (
+    CategoryService, MenuItemService, CriteriaService, CalculationParamsService,PublicRestaurantsService
+)
+
+
+
+
+# ─────────────────────────── Public: Restaurants ────────────────────────────
+
+class RestaurantListView(APIView):
+     
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=['public-restaurants'],
+        operation_id='v1_public_restaurants_list',
+        summary='List all active restaurants',
+        responses={200: OpenApiResponse(response=PublicRestaurantProfileSerializer(many=True))},
+    )
+    def get(self, request):
+        restaurants = PublicRestaurantsService.list_active_restaurants()
+        return Response(PublicRestaurantProfileSerializer(restaurants, many=True).data)
+
+
+class RestaurantDetailView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=['public-restaurants'],
+        operation_id='v1_public_restaurants_retrieve',
+        summary='Retrieve a restaurant by ID',
+        responses={
+            200: OpenApiResponse(response=PublicRestaurantProfileSerializer),
+            404: OpenApiResponse(description='Restaurant not found'),
+        },
+    )
+    def get(self, request, pk):
+        restaurant = PublicRestaurantsService.get_active_restaurant(pk)
+        return Response(PublicRestaurantProfileSerializer(restaurant).data)
+
+
+class RestaurantMenuItemsView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=['public-restaurants'],
+        operation_id='v1_public_restaurant_menu_items',
+        summary='List all available menu items for a specific restaurant',
+        responses={
+            200: OpenApiResponse(response=MenuItemSerializer(many=True)),
+            404: OpenApiResponse(description='Restaurant not found'),
+        },
+    )
+    def get(self, request, pk):
+        items = PublicRestaurantsService.list_menu_items(pk)
+        return Response(MenuItemSerializer(items, many=True).data)
+
+
+# ─────────────────────────── Categories ────────────────────────────
+
+@extend_schema(tags=['restaurant-categories'])
+class CategoryListCreateView(APIView):
+    
+    permission_classes = [IsRestaurantOwner]
+
+    @extend_schema(
+        tags=['restaurant-categories'],
+        operation_id='v1_restaurants_categories_list',
+        summary='List categories',
+        description='Returns all categories belonging to the authenticated restaurant.',
+        responses={200: OpenApiResponse(response=CategorySerializer(many=True))},
+    )
+    def get(self, request):
+        profile = request.user.restaurant_profile
+        categories = CategoryService.list_for_restaurant(profile)
+        return Response(CategorySerializer(categories, many=True).data)
+
+    @extend_schema(
+        tags=['restaurant-categories'],
+        operation_id='v1_restaurants_categories_create',
+        summary='Create a category',
+        request=CategorySerializer,
+        responses={
+            201: OpenApiResponse(response=CategorySerializer),
+            400: OpenApiResponse(description='Validation error'),
+        },
+    )
+    def post(self, request):
+        profile = request.user.restaurant_profile
+        serializer = CategorySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        category = CategoryService.create(profile, serializer.validated_data)
+        return Response(CategorySerializer(category).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=['restaurant-categories'])
+class CategoryDetailView(APIView):
+    
+    permission_classes = [IsRestaurantOwner]
+
+    def _get_category(self, request, pk):
+        return CategoryService.get_by_id(pk, request.user.restaurant_profile)
+
+    @extend_schema(
+        tags=['restaurant-categories'],
+        operation_id='v1_restaurants_categories_retrieve',
+        summary='Retrieve a category',
+        responses={200: OpenApiResponse(response=CategorySerializer), 404: OpenApiResponse(description='Not found')},
+    )
+    def get(self, request, pk):
+        return Response(CategorySerializer(self._get_category(request, pk)).data)
+
+    @extend_schema(
+        tags=['restaurant-categories'],
+        operation_id='v1_restaurants_categories_update',
+        summary='Update a category (full)',
+        request=CategorySerializer,
+        responses={200: OpenApiResponse(response=CategorySerializer), 400: OpenApiResponse(description='Validation error')},
+    )
+    def put(self, request, pk):
+        category = self._get_category(request, pk)
+        serializer = CategorySerializer(category, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated = CategoryService.update(category, serializer.validated_data)
+        return Response(CategorySerializer(updated).data)
+
+    @extend_schema(
+        tags=['restaurant-categories'],
+        operation_id='v1_restaurants_categories_partial_update',
+        summary='Partial update a category',
+        request=CategorySerializer,
+        responses={200: OpenApiResponse(response=CategorySerializer)},
+    )
+    def patch(self, request, pk):
+        category = self._get_category(request, pk)
+        serializer = CategorySerializer(category, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updated = CategoryService.update(category, serializer.validated_data, partial=True)
+        return Response(CategorySerializer(updated).data)
+
+    @extend_schema(
+        tags=['restaurant-categories'],
+        operation_id='v1_restaurants_categories_delete',
+        summary='Delete a category',
+        responses={204: OpenApiResponse(description='Deleted')},
+    )
+    def delete(self, request, pk):
+        CategoryService.delete(self._get_category(request, pk))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ─────────────────────────── Menu Items ────────────────────────────
+
+@extend_schema(tags=['restaurant-menu-items'])
+class MenuItemListCreateView(APIView):
+    
+    permission_classes = [IsRestaurantOwner]
+
+    @extend_schema(
+        tags=['restaurant-menu-items'],
+        operation_id='v1_restaurants_menu_items_list',
+        summary='List menu items',
+        description='Returns all menu items of the authenticated restaurant. Category is optional.',
+        responses={200: OpenApiResponse(response=MenuItemSerializer(many=True))},
+    )
+    def get(self, request):
+        profile = request.user.restaurant_profile
+        items = MenuItemService.list_for_restaurant(profile)
+        return Response(MenuItemSerializer(items, many=True).data)
+
+    @extend_schema(
+        tags=['restaurant-menu-items'],
+        operation_id='v1_restaurants_menu_items_create',
+        summary='Create a menu item',
+        request=MenuItemSerializer,
+        responses={
+            201: OpenApiResponse(response=MenuItemSerializer),
+            400: OpenApiResponse(description='Validation error'),
+        },
+    )
+    def post(self, request):
+        profile = request.user.restaurant_profile
+        serializer = MenuItemSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        item = MenuItemService.create(profile, serializer.validated_data)
+        return Response(MenuItemSerializer(item).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=['restaurant-menu-items'])
+class MenuItemDetailView(APIView):
+    
+    permission_classes = [IsRestaurantOwner]
+
+    def _get_item(self, request, pk):
+        return MenuItemService.get_by_id(pk, request.user.restaurant_profile)
+
+    @extend_schema(
+        tags=['restaurant-menu-items'],
+        operation_id='v1_restaurants_menu_items_retrieve',
+        summary='Retrieve a menu item',
+        responses={200: OpenApiResponse(response=MenuItemSerializer), 404: OpenApiResponse(description='Not found')},
+    )
+    def get(self, request, pk):
+        return Response(MenuItemSerializer(self._get_item(request, pk)).data)
+
+    @extend_schema(
+        tags=['restaurant-menu-items'],
+        operation_id='v1_restaurants_menu_items_update',
+        summary='Update a menu item (full)',
+        request=MenuItemSerializer,
+        responses={200: OpenApiResponse(response=MenuItemSerializer)},
+    )
+    def put(self, request, pk):
+        item = self._get_item(request, pk)
+        serializer = MenuItemSerializer(item, data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        updated = MenuItemService.update(item, serializer.validated_data)
+        return Response(MenuItemSerializer(updated).data)
+
+    @extend_schema(
+        tags=['restaurant-menu-items'],
+        operation_id='v1_restaurants_menu_items_partial_update',
+        summary='Partial update a menu item',
+        request=MenuItemSerializer,
+        responses={200: OpenApiResponse(response=MenuItemSerializer)},
+    )
+    def patch(self, request, pk):
+        item = self._get_item(request, pk)
+        serializer = MenuItemSerializer(item, data=request.data, partial=True, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        updated = MenuItemService.update(item, serializer.validated_data, partial=True)
+        return Response(MenuItemSerializer(updated).data)
+
+    @extend_schema(
+        tags=['restaurant-menu-items'],
+        operation_id='v1_restaurants_menu_items_delete',
+        summary='Delete a menu item',
+        responses={204: OpenApiResponse(description='Deleted')},
+    )
+    def delete(self, request, pk):
+        MenuItemService.delete(self._get_item(request, pk))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ─────────────────────────── Criteria ────────────────────────────
+
+@extend_schema(tags=['restaurant-criteria'])
+class CriteriaView(APIView):
+    
+    permission_classes = [IsRestaurantOwner]
+
+    @extend_schema(
+        tags=['restaurant-criteria'],
+        operation_id='v1_restaurants_criteria_retrieve',
+        summary='Get criteria',
+        responses={
+            200: OpenApiResponse(response=CriteriaSerializer),
+            404: OpenApiResponse(description='No criteria configured yet'),
+        },
+    )
+    def get(self, request):
+        profile = request.user.restaurant_profile
+        criteria = CriteriaService.get_or_none(profile)
+        if criteria is None:
+            return Response(
+                {'detail': 'No criteria configured yet for this restaurant.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(CriteriaSerializer(criteria).data)
+
+    @extend_schema(
+        tags=['restaurant-criteria'],
+        operation_id='v1_restaurants_criteria_create_or_update',
+        summary='Create or update criteria',
+        request=CriteriaSerializer,
+        responses={
+            200: OpenApiResponse(response=CriteriaSerializer, description='Updated'),
+            201: OpenApiResponse(response=CriteriaSerializer, description='Created'),
+            400: OpenApiResponse(description='Validation error'),
+        },
+    )
+    def post(self, request):
+        profile = request.user.restaurant_profile
+        serializer = CriteriaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        criteria, created = CriteriaService.create_or_update(profile, serializer.validated_data)
+        http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(CriteriaSerializer(criteria).data, status=http_status)
+
+
+# ─────────────────────────── Calculation Params ────────────────────────────
+
+@extend_schema(tags=['restaurant-calculation-params'])
+class CalculationParamsView(APIView):
+    
+    permission_classes = [IsRestaurantOwner]
+
+    def _get_params(self, request, pk):
+        return CalculationParamsService.get_by_id(pk, request.user.restaurant_profile)
+
+    @extend_schema(
+        tags=['restaurant-calculation-params'],
+        operation_id='v1_restaurants_calculation_params_retrieve',
+        summary='Retrieve calculation params',
+        responses={200: OpenApiResponse(response=CalculationParamsSerializer), 404: OpenApiResponse(description='Not found')},
+    )
+    def get(self, request, pk):
+        return Response(CalculationParamsSerializer(self._get_params(request, pk)).data)
+
+    @extend_schema(
+        tags=['restaurant-calculation-params'],
+        operation_id='v1_restaurants_calculation_params_update',
+        summary='Update calculation params (full)',
+        request=CalculationParamsSerializer,
+        responses={200: OpenApiResponse(response=CalculationParamsSerializer), 400: OpenApiResponse(description='Validation error')},
+    )
+    def put(self, request, pk):
+        params = self._get_params(request, pk)
+        serializer = CalculationParamsSerializer(params, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated = CalculationParamsService.update(params, serializer.validated_data)
+        return Response(CalculationParamsSerializer(updated).data)
+
+    @extend_schema(
+        tags=['restaurant-calculation-params'],
+        operation_id='v1_restaurants_calculation_params_partial_update',
+        summary='Partial update calculation params',
+        request=CalculationParamsSerializer,
+        responses={200: OpenApiResponse(response=CalculationParamsSerializer)},
+    )
+    def patch(self, request, pk):
+        params = self._get_params(request, pk)
+        serializer = CalculationParamsSerializer(params, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updated = CalculationParamsService.update(params, serializer.validated_data, partial=True)
+        return Response(CalculationParamsSerializer(updated).data)
+
+    @extend_schema(
+        tags=['restaurant-calculation-params'],
+        operation_id='v1_restaurants_calculation_params_delete',
+        summary='Delete calculation params',
+        responses={204: OpenApiResponse(description='Deleted')},
+    )
+    def delete(self, request, pk):
+        CalculationParamsService.delete(self._get_params(request, pk))
+        return Response(status=status.HTTP_204_NO_CONTENT)
