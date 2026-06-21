@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from apps.restaurants.models import Category, MenuItem, Criteria, RestaurantCalculationParams
 from apps.users.models import RestaurantProfile
-import uuid
+from apps.restaurants.helpers.validators import ServiceErrorHandler as sh
+
 
 
 class PublicRestaurantProfileSerializer(serializers.ModelSerializer):
@@ -33,7 +34,7 @@ class MenuItemSerializer(serializers.ModelSerializer):
             'name', 'prep_time', 'price', 'is_available',
             'created_at', 'updated_at',
         )
-        read_only_fields = ('id', 'category_name', 'category_priority', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'category_name', 'category_priority', 'created_at', 'updated_at','restaurant')
 
     def validate_category(self, category):
         if category is None:
@@ -47,10 +48,6 @@ class MenuItemSerializer(serializers.ModelSerializer):
         return category
 
     def validate(self, data):
-        request = self.context.get('request')
-        if request and hasattr(request.user, 'restaurant_profile'):
-            if 'restaurant' not in data or data['restaurant'] is None:
-                data['restaurant'] = request.user.restaurant_profile
         return data
 
 
@@ -58,7 +55,7 @@ class CriteriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Criteria
         fields = ('id', 'restaurant', 'max_quantity', 'min_category_priority', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'created_at', 'updated_at')
+        read_only_fields = ('id','restaurant' ,'created_at', 'updated_at')
 
     def validate_min_category_priority(self, value):
         if not (1 <= value <= 5):
@@ -66,22 +63,24 @@ class CriteriaSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
-        request = self.context.get('request')
-        if request and hasattr(request.user, 'restaurant_profile'):
-            if 'restaurant' not in data or data['restaurant'] is None:
-                data['restaurant'] = request.user.restaurant_profile
         return data
 
 
 class CalculationParamsSerializer(serializers.ModelSerializer):
+    time_weight = serializers.FloatField(validators=[sh.validate_positive])
+    quantity_weight = serializers.FloatField(validators=[sh.validate_positive])
+    category_weight = serializers.FloatField(validators=[sh.validate_positive])
     class Meta:
         model = RestaurantCalculationParams
         fields = ('id', 'restaurant', 'time_weight', 'quantity_weight', 'category_weight', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at','restaurant')
 
     def validate(self, data):
-        request = self.context.get('request')
-        if request and hasattr(request.user, 'restaurant_profile'):
-            if 'restaurant' not in data or data['restaurant'] is None:
-                data['restaurant'] = request.user.restaurant_profile
+        
+         # Only check sum when all three are provided (full update or create)
+        if all(k in data for k in ('time_weight', 'quantity_weight', 'category_weight')):
+            total = data['time_weight'] + data['quantity_weight'] + data['category_weight']
+            if abs(total - 1.0) > 0.0001:
+                raise serializers.ValidationError("Weights must sum to 1.")
+        
         return data

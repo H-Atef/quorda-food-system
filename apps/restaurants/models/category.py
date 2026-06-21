@@ -26,7 +26,12 @@ class Category(models.Model):
         verbose_name = 'Category'
         verbose_name_plural = 'Categories'
         ordering = ['-priority', 'name']
-        unique_together = [('restaurant', 'name')]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['restaurant', 'name'],
+                name='unique_category_restaurant_name'
+            )
+        ]
 
     def __str__(self):
         return f"{self.name} (priority={self.priority}) — {self.restaurant.restaurant_name}"

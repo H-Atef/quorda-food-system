@@ -4,6 +4,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import NotFound
 
 from apps.restaurants.permissions import IsRestaurantOwner
 from apps.restaurants.serializers import (
@@ -298,61 +299,119 @@ class CriteriaView(APIView):
         criteria, created = CriteriaService.create_or_update(profile, serializer.validated_data)
         http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(CriteriaSerializer(criteria).data, status=http_status)
+    
+    @extend_schema(
+        tags=['restaurant-criteria'],
+        operation_id='v1_restaurants_criteria_delete',
+        summary='Delete criteria',
+        responses={
+            204: OpenApiResponse(description='Deleted successfully'),
+            404: OpenApiResponse(description='No criteria configured'),
+        },
+    )
+    def delete(self, request):
+        profile = request.user.restaurant_profile
+        criteria = CriteriaService.get_or_none(profile)
+        if criteria is None:
+            raise NotFound('No criteria configured for this restaurant.')
+        CriteriaService.delete(criteria)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ─────────────────────────── Calculation Params ────────────────────────────
 
+
+
 @extend_schema(tags=['restaurant-calculation-params'])
 class CalculationParamsView(APIView):
-    
     permission_classes = [IsRestaurantOwner]
 
-    def _get_params(self, request, pk):
-        return CalculationParamsService.get_by_id(pk, request.user.restaurant_profile)
-
     @extend_schema(
-        tags=['restaurant-calculation-params'],
-        operation_id='v1_restaurants_calculation_params_retrieve',
-        summary='Retrieve calculation params',
-        responses={200: OpenApiResponse(response=CalculationParamsSerializer), 404: OpenApiResponse(description='Not found')},
+        operation_id='v1_restaurants_calculation_params_get',
+        summary='Retrieve calculation params for authenticated restaurant',
+        responses={
+            200: OpenApiResponse(response=CalculationParamsSerializer),
+            404: OpenApiResponse(description='No params configured'),
+        },
     )
-    def get(self, request, pk):
-        return Response(CalculationParamsSerializer(self._get_params(request, pk)).data)
+    def get(self, request):
+        profile = request.user.restaurant_profile
+        params = CalculationParamsService.get_for_restaurant(profile)
+        return Response(CalculationParamsSerializer(params).data)
 
     @extend_schema(
-        tags=['restaurant-calculation-params'],
-        operation_id='v1_restaurants_calculation_params_update',
-        summary='Update calculation params (full)',
+        operation_id='v1_restaurants_calculation_params_create',
+        summary='Create calculation params',
         request=CalculationParamsSerializer,
-        responses={200: OpenApiResponse(response=CalculationParamsSerializer), 400: OpenApiResponse(description='Validation error')},
+        responses={
+            201: OpenApiResponse(response=CalculationParamsSerializer),
+            400: OpenApiResponse(description='Validation error'),
+            409: OpenApiResponse(description='Params already exist (use PUT to update)'),
+        },
     )
-    def put(self, request, pk):
-        params = self._get_params(request, pk)
+    def post(self, request):
+        profile = request.user.restaurant_profile
+        # Check if already exists
+        try:
+            CalculationParamsService.get_for_restaurant(profile)
+            return Response(
+                {"detail": "Params already exist. Use PUT or PATCH to update."},
+                status=status.HTTP_409_CONFLICT
+            )
+        except NotFound:
+            pass  # proceed to create
+
+        serializer = CalculationParamsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        params = CalculationParamsService.create(profile, serializer.validated_data)
+        return Response(CalculationParamsSerializer(params).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        operation_id='v1_restaurants_calculation_params_update',
+        summary='Full update calculation params',
+        request=CalculationParamsSerializer,
+        responses={
+            200: OpenApiResponse(response=CalculationParamsSerializer),
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='No params configured'),
+        },
+    )
+    def put(self, request):
+        profile = request.user.restaurant_profile
+        params = CalculationParamsService.get_for_restaurant(profile)
         serializer = CalculationParamsSerializer(params, data=request.data)
         serializer.is_valid(raise_exception=True)
         updated = CalculationParamsService.update(params, serializer.validated_data)
         return Response(CalculationParamsSerializer(updated).data)
 
     @extend_schema(
-        tags=['restaurant-calculation-params'],
         operation_id='v1_restaurants_calculation_params_partial_update',
         summary='Partial update calculation params',
         request=CalculationParamsSerializer,
-        responses={200: OpenApiResponse(response=CalculationParamsSerializer)},
+        responses={
+            200: OpenApiResponse(response=CalculationParamsSerializer),
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='No params configured'),
+        },
     )
-    def patch(self, request, pk):
-        params = self._get_params(request, pk)
+    def patch(self, request):
+        profile = request.user.restaurant_profile
+        params = CalculationParamsService.get_for_restaurant(profile)
         serializer = CalculationParamsSerializer(params, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         updated = CalculationParamsService.update(params, serializer.validated_data, partial=True)
         return Response(CalculationParamsSerializer(updated).data)
 
     @extend_schema(
-        tags=['restaurant-calculation-params'],
         operation_id='v1_restaurants_calculation_params_delete',
         summary='Delete calculation params',
-        responses={204: OpenApiResponse(description='Deleted')},
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            404: OpenApiResponse(description='No params configured'),
+        },
     )
-    def delete(self, request, pk):
-        CalculationParamsService.delete(self._get_params(request, pk))
+    def delete(self, request):
+        profile = request.user.restaurant_profile
+        params = CalculationParamsService.get_for_restaurant(profile)
+        CalculationParamsService.delete(params)
         return Response(status=status.HTTP_204_NO_CONTENT)

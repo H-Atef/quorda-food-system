@@ -35,6 +35,12 @@ class MenuItem(models.Model):
         verbose_name = 'Menu Item'
         verbose_name_plural = 'Menu Items'
         ordering = ['category__priority', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['restaurant', 'name'],
+                name='unique_menuitem_restaurant_name'
+            )
+        ]
 
     def __str__(self):
         cat = self.category.name if self.category else 'no category'

@@ -4,7 +4,7 @@ from apps.restaurants.views import (
     CategoryListCreateView, CategoryDetailView,
     MenuItemListCreateView, MenuItemDetailView,
     CriteriaView,
-    CalculationParamsView,
+    CalculationParamsView
 )
 
 urlpatterns = [
@@ -25,5 +25,6 @@ urlpatterns = [
     path('criteria/', CriteriaView.as_view(), name='restaurant-criteria'),
 
     # Calculation params (owner only)
-    path('calculation-params/<uuid:pk>/', CalculationParamsView.as_view(), name='restaurant-calculation-params-detail'),
-]
+    path('api/v1/restaurants/calculation-params/', CalculationParamsView.as_view(), name='calculation-params'),
+    
+    ]

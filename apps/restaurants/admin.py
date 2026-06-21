@@ -1,5 +1,5 @@
 from django.contrib import admin
-from apps.restaurants.models import Category, MenuItem, Criteria
+from apps.restaurants.models import Category, MenuItem, Criteria,RestaurantCalculationParams
 
 
 class MenuItemInline(admin.TabularInline):
@@ -28,5 +28,12 @@ class MenuItemAdmin(admin.ModelAdmin):
 @admin.register(Criteria)
 class CriteriaAdmin(admin.ModelAdmin):
     list_display = ('restaurant', 'max_quantity', 'min_category_priority', 'created_at')
+    search_fields = ('restaurant__restaurant_name',)
+    readonly_fields = ('created_at', 'updated_at')
+    
+    
+@admin.register(RestaurantCalculationParams)
+class CalculationParamsAdmin(admin.ModelAdmin):
+    list_display = ('restaurant', 'time_weight', 'quantity_weight', 'category_weight', 'created_at')
     search_fields = ('restaurant__restaurant_name',)
     readonly_fields = ('created_at', 'updated_at')
