@@ -1,62 +1,61 @@
-"""
-OrderSorter — Django ORM-aware version.
-
-Mirrors the original OrderSorter class:
-  - sort_with_window   → window-based: specials by ID first, normals by priority_score
-  - sort_without_window → specials by ID, then normals by priority_score
-  - get_vip_orders     → only special_flag=True, sorted by id
-  - get_normal_orders  → only special_flag=False, sorted by priority_score desc
-"""
-from apps.orders.helpers.priority_calculator import PriorityCalculator
-
-
 class OrderSorter:
+    """
+    Ranks orders for the kitchen display.
+
+    Rule: VIP orders (special_flag=True) always outrank normal orders.
+    Among normal orders, higher priority_score = more urgent = ranked first.
+
+    Order.id is a UUID (no numeric sequence), so:
+      - VIP tie-breaking uses id directly (UUID supports ordering via __lt__).
+      - Windowing uses chronological position (created_at), never id arithmetic.
+    """
 
     @staticmethod
-    def sort_with_window(orders, window_size: int = 10):
-        """Window-based sorting. Lower window first; within each window specials by ID then normals by score."""
+    def _sort_key(order):
+        # (0, ...) always sorts before (1, ...) -> VIP first, in one pass,
+        # no separate specials/normals lists needed.
+        if order.special_flag:
+            return (0, order.created_at)
+        return (1, -order.priority_score)
+
+    @classmethod
+    def sort_without_window(cls, orders):
+        """Global sort: VIP first (by id), then normals by priority_score desc."""
+        return sorted(orders, key=cls._sort_key)
+
+    @classmethod
+    def sort_with_window(cls, orders, window_size: int = 10):
+        """
+        Buckets orders into fixed-size chronological batches (oldest first),
+        then applies the VIP-first / score ordering inside each batch.
+        """
         if not orders:
             return []
 
-        windows = {}
-        for order in orders:
-            win_idx = (order.id - 1) // window_size
-            windows.setdefault(win_idx, []).append(order)
+        chronological = sorted(orders, key=lambda o: o.created_at)
 
-        result = []
-        for win_idx in sorted(windows.keys()):
-            win_orders = windows[win_idx]
-            specials = sorted([o for o in win_orders if o.special_flag], key=lambda o: o.id)
-            normals = sorted(
-                [o for o in win_orders if not o.special_flag],
-                key=lambda o: PriorityCalculator.compute_score(o),
-                reverse=True,
-            )
-            result.extend(specials)
-            result.extend(normals)
+        result, window = [], []
+        for idx, order in enumerate(chronological):
+            window.append(order)
+            if (idx + 1) % window_size == 0:
+                result.extend(sorted(window, key=cls._sort_key))
+                window = []  
+        if window:
+            result.extend(sorted(window, key=cls._sort_key))
         return result
 
     @staticmethod
-    def sort_without_window(orders):
-        """Global sort: specials by ID, then normals by priority score."""
-        specials = sorted([o for o in orders if o.special_flag], key=lambda o: o.id)
-        normals = sorted(
-            [o for o in orders if not o.special_flag],
-            key=lambda o: PriorityCalculator.compute_score(o),
-            reverse=True,
-        )
-        return specials + normals
-
-    @staticmethod
     def get_vip_orders(orders):
-        """Return only VIP (special_flag=True) orders sorted by ID ascending."""
-        return sorted([o for o in orders if o.special_flag], key=lambda o: o.id)
+        return sorted([o for o in orders if o.special_flag], key=lambda o: o.created_at)
 
     @staticmethod
     def get_normal_orders(orders):
-        """Return only non-VIP orders sorted by priority_score descending."""
-        return sorted(
-            [o for o in orders if not o.special_flag],
-            key=lambda o: PriorityCalculator.compute_score(o),
-            reverse=True,
-        )
+        return sorted([o for o in orders if not o.special_flag],
+                      key=lambda o: o.priority_score, reverse=True)
+        
+    @classmethod
+    def sort_normal_with_window(cls, orders, window_size: int = 10):
+        """Windows only normal (non-VIP) orders, sorted by priority_score
+        desc within each chronological window. VIP orders are excluded."""
+        normals = [o for o in orders if not o.special_flag]
+        return cls.sort_with_window(normals, window_size=window_size)

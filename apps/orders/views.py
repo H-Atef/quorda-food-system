@@ -1,242 +1,254 @@
-from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
-from rest_framework import status
-from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 
-from apps.restaurants.permissions import IsRestaurantOwner
-from apps.orders.serializers import OrderSerializer, OrderStatusUpdateSerializer
-from apps.orders.services import OrderService
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
+
+from apps.orders.models import Order, OrderItem
+from apps.orders.serializers import (
+    OrderSerializer, OrderWriteSerializer,
+    OrderItemReadSerializer, OrderItemWriteSerializer,
+)
+from apps.orders.permissions import IsRestaurantOwner, IsOrderItemOwner
+from apps.orders.helpers.order_sorter import OrderSorter
+from apps.orders.helpers.parallel_order_recommender import ParallelOrderRecommender
 
 
-def _get_restaurant_profile(request):
-    return request.user.restaurant_profile
+def _own_orders_qs(request):
+    return (
+        Order.objects.filter(restaurant=request.user.restaurant_profile)
+        .prefetch_related('order_items__menu_item__category')
+    )
 
 
-# ── Orders ───────────────────────────────────────────────────────────────────
+def _get_owned_order(request, order_pk):
+    """Fetch an order and enforce that it belongs to the requesting restaurant."""
+    order = Order.objects.get(pk=order_pk)
+    if order.restaurant_id != request.user.restaurant_profile.id:
+        raise Order.DoesNotExist  # surfaces as 404, doesn't leak existence
+    return order
 
-class OrderListCreateView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+
+WINDOW_SIZE_PARAM = OpenApiParameter(
+    name='window_size',
+    type=OpenApiTypes.INT,
+    location=OpenApiParameter.QUERY,
+    required=False,
+    default=10,
+    description='Number of orders per chronological window.',
+)
+
+
+@extend_schema(tags=['Orders'])
+class OrderListCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
 
     @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_list',
-        summary='List all orders for the authenticated restaurant',
-        responses={200: OpenApiResponse(response=OrderSerializer(many=True))},
+        summary='List my orders',
+        description="Returns all orders belonging to the authenticated restaurant.",
+        responses=OrderSerializer(many=True),
     )
     def get(self, request):
-        orders = OrderService.list_orders(_get_restaurant_profile(request))
+        orders = _own_orders_qs(request)
         return Response(OrderSerializer(orders, many=True).data)
 
     @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_create',
-        summary='Create a new order',
-        description='If is_indoor=false (delivery) customer FK is required. If is_indoor=true (dine-in) customer is optional.',
-        request=OrderSerializer,
-        responses={
-            201: OpenApiResponse(response=OrderSerializer),
-            400: OpenApiResponse(description='Validation error'),
-        },
+        summary='Create an order',
+        request=OrderWriteSerializer,
+        responses={201: OrderSerializer},
     )
     def post(self, request):
-        serializer = OrderSerializer(data=request.data)
+        serializer = OrderWriteSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        order = serializer.save(restaurant=_get_restaurant_profile(request))
+        order = serializer.save()
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
-class OrderDetailView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+@extend_schema(tags=['Orders'])
+class OrderDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
 
-    def _get(self, request, pk):
-        return OrderService.get_by_id(pk, _get_restaurant_profile(request))
+    def get_object(self, request, pk):
+        order = Order.objects.prefetch_related('order_items__menu_item__category').get(pk=pk)
+        self.check_object_permissions(request, order)
+        return order
 
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_detail',
-        summary='Retrieve an order',
-        responses={200: OpenApiResponse(response=OrderSerializer), 404: OpenApiResponse(description='Not found')},
-    )
+    @extend_schema(summary='Retrieve an order', responses=OrderSerializer)
     def get(self, request, pk):
-        return Response(OrderSerializer(self._get(request, pk)).data)
+        order = self.get_object(request, pk)
+        return Response(OrderSerializer(order).data)
 
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_update',
-        summary='Full update an order',
-        request=OrderSerializer,
-        responses={200: OpenApiResponse(response=OrderSerializer)},
-    )
+    @extend_schema(summary='Replace an order', request=OrderWriteSerializer, responses=OrderSerializer)
     def put(self, request, pk):
-        order = self._get(request, pk)
-        serializer = OrderSerializer(order, data=request.data)
+        order = self.get_object(request, pk)
+        serializer = OrderWriteSerializer(order, data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        updated = serializer.save()
-        return Response(OrderSerializer(updated).data)
+        order = serializer.save()
+        return Response(OrderSerializer(order).data)
 
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_partial_update',
-        summary='Partial update an order',
-        request=OrderSerializer,
-        responses={200: OpenApiResponse(response=OrderSerializer)},
-    )
+    @extend_schema(summary='Partially update an order', request=OrderWriteSerializer, responses=OrderSerializer)
     def patch(self, request, pk):
-        order = self._get(request, pk)
-        serializer = OrderSerializer(order, data=request.data, partial=True)
+        order = self.get_object(request, pk)
+        serializer = OrderWriteSerializer(order, data=request.data, partial=True, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        updated = serializer.save()
-        return Response(OrderSerializer(updated).data)
+        order = serializer.save()
+        return Response(OrderSerializer(order).data)
 
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_delete',
-        summary='Delete an order',
-        responses={204: OpenApiResponse(description='Deleted')},
-    )
+    @extend_schema(summary='Delete an order', responses={204: None})
     def delete(self, request, pk):
-        OrderService.delete(self._get(request, pk))
+        order = self.get_object(request, pk)
+        order.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class OrderStatusView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+@extend_schema(tags=['Orders'])
+class VIPOrdersAPIView(APIView):
+    """GET: VIP-only orders (special_flag=True), sorted by id."""
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
 
     @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_update_status',
-        summary='Update order status',
-        request=OrderStatusUpdateSerializer,
-        responses={200: OpenApiResponse(response=OrderSerializer)},
-    )
-    def patch(self, request, pk):
-        order = OrderService.get_by_id(pk, _get_restaurant_profile(request))
-        serializer = OrderStatusUpdateSerializer(order, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        updated = OrderService.update_status(order, serializer.validated_data['status'])
-        return Response(OrderSerializer(updated).data)
-
-
-class OrderSortedView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
-
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_sorted',
-        summary='Get all orders sorted (window or global)',
-        parameters=[
-            OpenApiParameter('use_window', bool, required=False, default=True,
-                             description='Use window-based sorting (default true)'),
-            OpenApiParameter('window_size', int, required=False, default=10,
-                             description='Window size (default 10)'),
-        ],
-        responses={200: OpenApiResponse(response=OrderSerializer(many=True))},
+        summary='List VIP orders',
+        description='Returns only orders with special_flag=True, sorted by id ascending.',
+        responses=OrderSerializer(many=True),
     )
     def get(self, request):
-        use_window = request.query_params.get('use_window', 'true').lower() != 'false'
+        orders = _own_orders_qs(request)
+        vip = OrderSorter.get_vip_orders(orders)
+        return Response(OrderSerializer(vip, many=True).data)
+
+
+@extend_schema(tags=['Orders'])
+class OrderRecommendationsAPIView(APIView):
+    """GET: parallel-cooking recommendations for this restaurant's orders."""
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
+
+    @extend_schema(
+        summary='Get parallel-cooking recommendations',
+        description=(
+            'For each order, returns up to 7 other orders that share menu items '
+            'with a quantity difference <= 1, ranked by shared-item count then '
+            'total quantity difference.'
+        ),
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def get(self, request):
+        orders = _own_orders_qs(request)
+        recommendations = ParallelOrderRecommender.recommend(orders)
+        return Response(recommendations)
+
+
+@extend_schema(tags=['Orders'])
+class WindowedOrdersAPIView(APIView):
+    """GET: orders grouped into chronological windows, VIP-first + priority sorted within each."""
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
+
+    @extend_schema(
+        summary='List orders windowed (all orders)',
+        description='Chronological windows of size window_size; VIP orders rank first within each window, normals sorted by priority_score desc.',
+        parameters=[WINDOW_SIZE_PARAM],
+        responses=OrderSerializer(many=True),
+    )
+    def get(self, request):
         window_size = int(request.query_params.get('window_size', 10))
-        orders = OrderService.get_sorted(_get_restaurant_profile(request), use_window, window_size)
+        orders = _own_orders_qs(request)
+        sorted_orders = OrderSorter.sort_with_window(orders, window_size=window_size)
+        return Response(OrderSerializer(sorted_orders, many=True).data)
+
+
+@extend_schema(tags=['Orders'])
+class OrdersByCreationTimeAPIView(APIView):
+    """GET: orders ordered by creation time (uses Order.Meta default ordering)."""
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
+
+    @extend_schema(
+        summary='List orders by creation time',
+        description='Orders sorted newest-first (Order.Meta.ordering = -created_at).',
+        responses=OrderSerializer(many=True),
+    )
+    def get(self, request):
+        orders = _own_orders_qs(request)
         return Response(OrderSerializer(orders, many=True).data)
 
 
-class OrderVIPView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+@extend_schema(tags=['Orders'])
+class NormalOrdersWindowedAPIView(APIView):
+    """GET: non-VIP orders only, grouped into chronological windows and sorted by priority_score desc."""
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
 
     @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_vip',
-        summary='Get VIP (special_flag=True) orders sorted by ID',
-        responses={200: OpenApiResponse(response=OrderSerializer(many=True))},
+        summary='List normal (non-VIP) orders windowed',
+        description='Same windowing as /orders/windowed/ but excludes VIP orders entirely.',
+        parameters=[WINDOW_SIZE_PARAM],
+        responses=OrderSerializer(many=True),
     )
     def get(self, request):
-        orders = OrderService.get_vip(_get_restaurant_profile(request))
-        return Response(OrderSerializer(orders, many=True).data)
+        window_size = int(request.query_params.get('window_size', 10))
+        orders = _own_orders_qs(request)
+        sorted_orders = OrderSorter.sort_normal_with_window(orders, window_size=window_size)
+        return Response(OrderSerializer(sorted_orders, many=True).data)
 
 
-class OrderNormalView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+@extend_schema(tags=['Order Items'])
+class OrderItemListCreateAPIView(APIView):
+    """Items of one order. Creating/deleting items triggers the OrderItem
+    post_save/post_delete signal, which recalculates the parent order's
+    priority_score automatically — no manual recalc needed here."""
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
+
+    @extend_schema(summary='List items of an order', responses=OrderItemReadSerializer(many=True))
+    def get(self, request, order_pk):
+        order = _get_owned_order(request, order_pk)
+        items = order.order_items.select_related('menu_item__category').all()
+        return Response(OrderItemReadSerializer(items, many=True).data)
 
     @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_normal',
-        summary='Get normal (special_flag=False) orders sorted by priority score',
-        responses={200: OpenApiResponse(response=OrderSerializer(many=True))},
+        summary='Add an item to an order',
+        request=OrderItemWriteSerializer,
+        responses={201: OrderItemReadSerializer},
     )
-    def get(self, request):
-        orders = OrderService.get_normal(_get_restaurant_profile(request))
-        return Response(OrderSerializer(orders, many=True).data)
+    def post(self, request, order_pk):
+        order = _get_owned_order(request, order_pk)
+        serializer = OrderItemWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save(order=order)
+        return Response(OrderItemReadSerializer(item).data, status=status.HTTP_201_CREATED)
 
 
-class OrderPendingView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+@extend_schema(tags=['Order Items'])
+class OrderItemDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurantOwner, IsOrderItemOwner]
 
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_pending',
-        summary='Get all pending orders',
-        responses={200: OpenApiResponse(response=OrderSerializer(many=True))},
-    )
-    def get(self, request):
-        orders = OrderService.get_pending(_get_restaurant_profile(request))
-        return Response(OrderSerializer(orders, many=True).data)
+    def get_object(self, request, order_pk, pk):
+        order = _get_owned_order(request, order_pk)  # 404s if not owned
+        item = order.order_items.select_related('menu_item__category').get(pk=pk)
+        self.check_object_permissions(request, item)
+        return item
 
+    @extend_schema(summary='Retrieve an order item', responses=OrderItemReadSerializer)
+    def get(self, request, order_pk, pk):
+        item = self.get_object(request, order_pk, pk)
+        return Response(OrderItemReadSerializer(item).data)
 
-class OrderRecommendationsView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
+    @extend_schema(summary='Replace an order item', request=OrderItemWriteSerializer, responses=OrderItemReadSerializer)
+    def put(self, request, order_pk, pk):
+        item = self.get_object(request, order_pk, pk)
+        serializer = OrderItemWriteSerializer(item, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        return Response(OrderItemReadSerializer(item).data)
 
-    @extend_schema(
-        tags=['orders'],
-        operation_id='v1_orders_recommendations',
-        summary='Get parallel cooking recommendations',
-        description=(
-            'For each order, lists other orders sharing at least one menu item '
-            'with quantity difference ≤ 1. Returns top 7 per order by default.'
-        ),
-        parameters=[
-            OpenApiParameter('top_n', int, required=False, default=7,
-                             description='Max recommendations per order'),
-        ],
-        responses={200: OpenApiResponse(description='Dict of order_id → list of recommendations')},
-    )
-    def get(self, request):
-        top_n = int(request.query_params.get('top_n', 7))
-        data = OrderService.get_recommendations(_get_restaurant_profile(request), top_n=top_n)
-        return Response(data)
+    @extend_schema(summary='Partially update an order item', request=OrderItemWriteSerializer, responses=OrderItemReadSerializer)
+    def patch(self, request, order_pk, pk):
+        item = self.get_object(request, order_pk, pk)
+        serializer = OrderItemWriteSerializer(item, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        return Response(OrderItemReadSerializer(item).data)
 
-
-class OrderDetectSimpleView(APIView):
-    
-    permission_classes = [IsRestaurantOwner]
-
-    @extend_schema(
-        tags=['orders'],
-        summary='Detect simple orders using the restaurant\'s configured criteria',
-        description=(
-            'Uses the Criteria configured for this restaurant. '
-            'Returns 404 if no criteria has been set yet.'
-        ),
-        responses={
-            200: OpenApiResponse(response=OrderSerializer(many=True)),
-            404: OpenApiResponse(description='No criteria configured for this restaurant'),
-        },
-    )
-    def get(self, request):
-        profile = _get_restaurant_profile(request)
-        criteria = getattr(profile, 'criteria', None)
-        if criteria is None:
-            return Response(
-                {'detail': 'No criteria configured for this restaurant. '
-                           'Please POST to /api/v1/restaurants/criteria/ first.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        simple_orders = OrderService.detect_simple(profile, criteria)
-        return Response(OrderSerializer(simple_orders, many=True).data)
+    @extend_schema(summary='Delete an order item', responses={204: None})
+    def delete(self, request, order_pk, pk):
+        item = self.get_object(request, order_pk, pk)
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

@@ -3,6 +3,8 @@ from django.conf import settings
 import uuid
 
 
+
+
 class Order(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     restaurant = models.ForeignKey(
@@ -35,6 +37,9 @@ class Order(models.Model):
         default=False,
         help_text='VIP order — sorted by ID before normal orders.',
     )
+    
+    priority_score = models.FloatField(default=0.0, editable=False)
+     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -44,21 +49,28 @@ class Order(models.Model):
         ordering = ['-created_at']
 
     @property
-    def total_quantity(self):
+    def total_quantity(self) -> int:
         return sum(item.quantity for item in self.order_items.all())
 
     @property
-    def total_prep_time(self):
+    def total_prep_time(self) -> int:
         return sum(item.menu_item.prep_time * item.quantity for item in self.order_items.all())
 
     @property
-    def total_cost(self):
+    def total_cost(self) -> float:
         return sum(float(item.menu_item.price) * item.quantity for item in self.order_items.all())
 
     @property
-    def priority_score(self):
+    def priority_score(self) -> float:
         from apps.orders.helpers.priority_calculator import PriorityCalculator
         return PriorityCalculator.compute_score(self)
+    
+    
+    @property
+    def recalculate_priority_score(self) -> float:
+        from apps.orders.helpers.priority_calculator import PriorityCalculator
+        self.priority_score = PriorityCalculator.compute_score(self)
+        self.save(update_fields=['priority_score'])
 
     def __str__(self):
         return f"Order #{self.id} — {self.restaurant.restaurant_name} [{self.status}]"

@@ -1,24 +1,15 @@
 from django.urls import path
-from apps.orders.views import (
-    OrderListCreateView,
-    OrderDetailView,
-    OrderStatusView,
-    OrderSortedView,
-    OrderVIPView,
-    OrderNormalView,
-    OrderPendingView,
-    OrderRecommendationsView,
-    OrderDetectSimpleView,
-)
+from apps.orders import views
 
 urlpatterns = [
-    path('', OrderListCreateView.as_view(), name='order-list-create'),
-    path('<int:pk>/', OrderDetailView.as_view(), name='order-detail'),
-    path('<int:pk>/status/', OrderStatusView.as_view(), name='order-status-update'),
-    path('sorted/', OrderSortedView.as_view(), name='order-sorted'),
-    path('vip/', OrderVIPView.as_view(), name='order-vip'),
-    path('normal/', OrderNormalView.as_view(), name='order-normal'),
-    path('pending/', OrderPendingView.as_view(), name='order-pending'),
-    path('recommendations/', OrderRecommendationsView.as_view(), name='order-recommendations'),
-    path('detect-simple/', OrderDetectSimpleView.as_view(), name='order-detect-simple'),
+    path('', views.OrderListCreateAPIView.as_view(), name='order-list-create'),
+    path('<uuid:pk>/', views.OrderDetailAPIView.as_view(), name='order-detail'),
+    path('vip/', views.VIPOrdersAPIView.as_view(), name='order-vip'),
+    path('recommendations/', views.OrderRecommendationsAPIView.as_view(), name='order-recommendations'),
+    path('normal/windowed/', views.NormalOrdersWindowedAPIView.as_view(), name='order-normal-windowed'),
+    path('windowed/', views.WindowedOrdersAPIView.as_view(), name='order-windowed'),
+    path('by-creation-time/', views.OrdersByCreationTimeAPIView.as_view(), name='order-by-creation-time'),
+    path('<uuid:order_pk>/items/', views.OrderItemListCreateAPIView.as_view(), name='order-item-list-create'),
+    path('<uuid:order_pk>/items/<uuid:pk>/', views.OrderItemDetailAPIView.as_view(), name='order-item-detail'),
+    
 ]
