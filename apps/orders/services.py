@@ -4,8 +4,6 @@ from rest_framework.exceptions import ValidationError
 
 from apps.orders.models import Order, OrderItem
 from apps.orders.helpers.order_sorter import OrderSorter
-from apps.orders.helpers.parallel_order_recommender import ParallelOrderRecommender
-
 
 class OrderService:
     """Business logic for restaurant-owner order operations (dine-in +
@@ -98,11 +96,6 @@ class OrderService:
     def get_vip_orders(restaurant):
         orders = OrderService.get_restaurant_orders_qs(restaurant)
         return OrderSorter.get_vip_orders(orders)
-
-    @staticmethod
-    def get_recommendations(restaurant):
-        orders = OrderService.get_restaurant_orders_qs(restaurant)
-        return ParallelOrderRecommender.recommend(orders)
 
     @staticmethod
     def get_windowed_orders(restaurant, window_size):

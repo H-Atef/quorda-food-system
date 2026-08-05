@@ -5,7 +5,6 @@ urlpatterns = [
     # ---- restaurant-owner routes ----
     path('', views.OrderListCreateAPIView.as_view(), name='order-list-create'),
     path('vip/', views.VIPOrdersAPIView.as_view(), name='order-vip'),
-    path('recommendations/', views.OrderRecommendationsAPIView.as_view(), name='order-recommendations'),
     path('normal/windowed/', views.NormalOrdersWindowedAPIView.as_view(), name='order-normal-windowed'),
     path('windowed/', views.WindowedOrdersAPIView.as_view(), name='order-windowed'),
     path('by-creation-time/', views.OrdersByCreationTimeAPIView.as_view(), name='order-by-creation-time'),

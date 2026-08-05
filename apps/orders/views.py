@@ -103,23 +103,6 @@ class VIPOrdersAPIView(APIView):
         return Response(OrderSerializer(vip, many=True).data)
 
 
-@extend_schema(tags=['Orders'])
-class OrderRecommendationsAPIView(APIView):
-    """GET: parallel-cooking recommendations for this restaurant's orders."""
-    permission_classes = [IsAuthenticated, IsRestaurantOwner]
-
-    @extend_schema(
-        summary='Get parallel-cooking recommendations',
-        description=(
-            'For each order, returns up to 7 other orders that share menu items '
-            'with a quantity difference <= 1, ranked by shared-item count then '
-            'total quantity difference.'
-        ),
-        responses={200: OpenApiTypes.OBJECT},
-    )
-    def get(self, request):
-        recommendations = OrderService.get_recommendations(request.user.restaurant_profile)
-        return Response(recommendations)
 
 
 @extend_schema(tags=['Orders'])
