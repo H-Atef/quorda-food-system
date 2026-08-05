@@ -23,7 +23,11 @@ class SimpleOrderDetector:
             if total_qty > criteria.max_quantity:
                 continue
             max_cat_prio = max(
-                (i.menu_item.category.priority for i in items),
+                (
+                    i.menu_item.category.priority
+                    for i in items
+                    if getattr(i.menu_item, 'category', None) is not None
+                ),
                 default=0,
             )
             if max_cat_prio >= criteria.min_category_priority:

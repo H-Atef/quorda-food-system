@@ -4,6 +4,8 @@ from rest_framework.exceptions import ValidationError
 
 from apps.orders.models import Order, OrderItem
 from apps.orders.helpers.order_sorter import OrderSorter
+from apps.orders.helpers.simple_order_detector import SimpleOrderDetector
+from apps.restaurants.services import CriteriaService
 
 class OrderService:
     """Business logic for restaurant-owner order operations (dine-in +
@@ -106,6 +108,23 @@ class OrderService:
     def get_normal_windowed_orders(restaurant, window_size):
         orders = OrderService.get_restaurant_orders_qs(restaurant)
         return OrderSorter.sort_normal_with_window(orders, window_size=window_size)
+
+    @staticmethod
+    def get_simple_orders(restaurant):
+        """Return orders matching the restaurant's simple-order criteria.
+
+        An order is "simple" when its total quantity is <= the restaurant's
+        ``Criteria.max_quantity`` AND the highest category priority among its
+        items is >= the restaurant's ``Criteria.min_category_priority``.
+
+        Falls back to an empty list when no criteria are configured for the
+        restaurant (simple-order detection is undefined without criteria).
+        """
+        criteria = CriteriaService.get_or_none(restaurant)
+        if criteria is None:
+            return []
+        orders = OrderService.get_restaurant_orders_qs(restaurant)
+        return SimpleOrderDetector.detect(orders, criteria)
 
 
 class CustomerOrderService:

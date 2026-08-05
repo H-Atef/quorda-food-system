@@ -154,6 +154,34 @@ class NormalOrdersWindowedAPIView(APIView):
         return Response(OrderSerializer(sorted_orders, many=True).data)
 
 
+@extend_schema(tags=['Orders'])
+class SimpleOrdersAPIView(APIView):
+    """GET: orders matching the restaurant's simple-order criteria.
+
+    An order is "simple" if its total quantity <= criteria.max_quantity and
+    the max category priority among its items >= criteria.min_category_priority.
+    """
+    permission_classes = [IsAuthenticated, IsRestaurantOwner]
+
+    @extend_schema(
+        summary='List simple orders',
+        description=(
+            "Returns orders matching the restaurant's simple-order criteria: "
+            "total quantity <= criteria.max_quantity and the highest item "
+            "category priority >= criteria.min_category_priority. "
+            "Returns an empty list when no criteria are configured."
+        ),
+        responses=OrderSerializer(many=True),
+    )
+    def get(self, request):
+        simple = OrderService.get_simple_orders(request.user.restaurant_profile)
+        return Response(OrderSerializer(simple, many=True).data)
+
+
+# ============================================================================
+# Order Items
+# ============================================================================
+
 @extend_schema(tags=['Order Items'])
 class OrderItemListCreateAPIView(APIView):
     """Items of one order. Creating/deleting items triggers the OrderItem

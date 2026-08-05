@@ -8,6 +8,7 @@ urlpatterns = [
     path('normal/windowed/', views.NormalOrdersWindowedAPIView.as_view(), name='order-normal-windowed'),
     path('windowed/', views.WindowedOrdersAPIView.as_view(), name='order-windowed'),
     path('by-creation-time/', views.OrdersByCreationTimeAPIView.as_view(), name='order-by-creation-time'),
+    path('simple/', views.SimpleOrdersAPIView.as_view(), name='order-simple'),
 
     # ---- customer routes (delivery orders) ----
     path('customers/', views.CustomerOrderListCreateAPIView.as_view(), name='customer-order-list-create'),
