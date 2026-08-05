@@ -16,7 +16,7 @@ class OrderSorter:
         # no separate specials/normals lists needed.
         if order.special_flag:
             return (0, order.created_at)
-        return (1, -order.priority_score)
+        return (1, order.priority_score)
 
     @classmethod
     def sort_without_window(cls, orders):

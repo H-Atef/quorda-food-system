@@ -1,5 +1,7 @@
 from rest_framework import serializers
+
 from apps.orders.models import Order, OrderItem
+from apps.users.models import RestaurantProfile
 
 
 class OrderItemWriteSerializer(serializers.ModelSerializer):
@@ -22,7 +24,7 @@ class OrderItemReadSerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
-    """Read serializer."""
+    """Read serializer. Shared by restaurant-owner and customer views."""
     order_items = OrderItemReadSerializer(many=True, read_only=True)
     total_quantity = serializers.ReadOnlyField()
     total_prep_time = serializers.ReadOnlyField()
@@ -36,11 +38,13 @@ class OrderSerializer(serializers.ModelSerializer):
             'total_quantity', 'total_prep_time', 'total_cost',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'priority_score', 'created_at', 'updated_at']
+        read_only_fields = fields
 
 
 class OrderWriteSerializer(serializers.ModelSerializer):
-    """Create/update serializer with nested order_items."""
+    """Create/update serializer used by restaurant owners. Validates shape
+    only — the view hands `validated_data` to OrderService, which owns the
+    actual create/update logic."""
     order_items = OrderItemWriteSerializer(many=True)
 
     class Meta:
@@ -53,27 +57,36 @@ class OrderWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('customer is required for delivery orders.')
         return attrs
 
-    def create(self, validated_data):
-        items_data = validated_data.pop('order_items')
-        restaurant = self.context['request'].user.restaurant_profile
-        order = Order.objects.create(restaurant=restaurant, **validated_data)
-        OrderItem.objects.bulk_create([
-            OrderItem(order=order, **item) for item in items_data
-        ])
-        order.recalculate_priority_score()
-        return order
 
-    def update(self, instance, validated_data):
-        items_data = validated_data.pop('order_items', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+class CustomerOrderCreateSerializer(serializers.ModelSerializer):
+    """Used by a customer placing a new delivery order. `restaurant` must
+    be supplied by the customer; `customer` and `is_indoor` are set by
+    CustomerOrderService, not exposed here."""
+    order_items = OrderItemWriteSerializer(many=True)
+    restaurant = serializers.PrimaryKeyRelatedField(queryset=RestaurantProfile.objects.all())
 
-        if items_data is not None:
-            instance.order_items.all().delete()
-            OrderItem.objects.bulk_create([
-                OrderItem(order=instance, **item) for item in items_data
-            ])
-            instance.recalculate_priority_score()
+    class Meta:
+        model = Order
+        fields = ['id', 'restaurant', 'order_items']
+        read_only_fields = ['id']
 
-        return instance
+    def validate_order_items(self, value):
+        if not value:
+            raise serializers.ValidationError('An order must contain at least one item.')
+        return value
+
+
+class CustomerOrderUpdateSerializer(serializers.ModelSerializer):
+    """Used by a customer editing their own order. Only order_items can be
+    changed, and only while status == pending (enforced in
+    CustomerOrderService, since that's a business rule, not a shape rule)."""
+    order_items = OrderItemWriteSerializer(many=True)
+
+    class Meta:
+        model = Order
+        fields = ['order_items']
+
+    def validate_order_items(self, value):
+        if not value:
+            raise serializers.ValidationError('An order must contain at least one item.')
+        return value

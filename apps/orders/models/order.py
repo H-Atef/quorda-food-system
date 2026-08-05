@@ -3,9 +3,13 @@ from django.conf import settings
 import uuid
 
 
-
-
 class Order(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PREPARING = 'preparing', 'Preparing'
+        DONE = 'done', 'Done'
+        CANCELLED = 'cancelled', 'Cancelled'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     restaurant = models.ForeignKey(
         'users.RestaurantProfile',
@@ -26,20 +30,17 @@ class Order(models.Model):
     )
     status = models.CharField(
         max_length=20,
-        choices=(
-            ('pending', 'Pending'),
-            ('preparing', 'Preparing'),
-            ('done', 'Done'),
-        ),
-        default='pending',
+        choices=Status.choices,
+        default=Status.PENDING,
     )
     special_flag = models.BooleanField(
         default=False,
         help_text='VIP order — sorted by ID before normal orders.',
     )
-    
+
+
     priority_score = models.FloatField(default=0.0, editable=False)
-     
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -60,17 +61,14 @@ class Order(models.Model):
     def total_cost(self) -> float:
         return sum(float(item.menu_item.price) * item.quantity for item in self.order_items.all())
 
-    @property
-    def priority_score(self) -> float:
-        from apps.orders.helpers.priority_calculator import PriorityCalculator
-        return PriorityCalculator.compute_score(self)
-    
-    
-    @property
-    def recalculate_priority_score(self) -> float:
+    def recalculate_priority_score(self) -> None:
+        """Recompute and persist priority_score. This is a regular method
+        (not a property) so it can't collide with the model field and its
+        call-site (`order.recalculate_priority_score()`) actually does
+        what it looks like it does."""
         from apps.orders.helpers.priority_calculator import PriorityCalculator
         self.priority_score = PriorityCalculator.compute_score(self)
-        self.save(update_fields=['priority_score'])
+        self.save(update_fields=['priority_score', 'updated_at'])
 
     def __str__(self):
         return f"Order #{self.id} — {self.restaurant.restaurant_name} [{self.status}]"
